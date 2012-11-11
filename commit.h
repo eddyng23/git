@@ -73,6 +73,7 @@ enum cmit_fmt {
 	CMIT_FMT_ONELINE,
 	CMIT_FMT_EMAIL,
 	CMIT_FMT_USERFORMAT,
+	CMIT_FMT_LUA,
 
 	CMIT_FMT_UNSPECIFIED
 };
@@ -86,7 +87,7 @@ struct pretty_print_context {
 	enum date_mode date_mode;
 	unsigned date_mode_explicit:1;
 	int need_8bit_cte;
-	int show_notes;
+	char *notes_message;
 	struct reflog_walk_info *reflog_info;
 	const char *output_encoding;
 };
@@ -99,8 +100,6 @@ extern int has_non_ascii(const char *text);
 struct rev_info; /* in revision.h, it circularly uses enum cmit_fmt */
 extern char *logmsg_reencode(const struct commit *commit,
 			     const char *output_encoding);
-extern char *reencode_commit_message(const struct commit *commit,
-				     const char **encoding_p);
 extern void get_commit_format(const char *arg, struct rev_info *);
 extern const char *format_subject(struct strbuf *sb, const char *msg,
 				  const char *line_separator);
@@ -126,6 +125,61 @@ void pp_remainder(const struct pretty_print_context *pp,
 		  struct strbuf *sb,
 		  int indent);
 
+struct chunk {
+	size_t off;
+	size_t len;
+};
+
+enum flush_type {
+	no_flush,
+	flush_right,
+	flush_left,
+	flush_left_and_steal,
+	flush_both
+};
+
+enum trunc_type {
+	trunc_none,
+	trunc_left,
+	trunc_middle,
+	trunc_right
+};
+
+struct format_commit_context {
+	const struct commit *commit;
+	const struct pretty_print_context *pretty_ctx;
+	unsigned commit_header_parsed:1;
+	unsigned commit_message_parsed:1;
+	unsigned commit_signature_parsed:1;
+	enum flush_type flush_type;
+	enum trunc_type truncate;
+	struct {
+		char *gpg_output;
+		char good_bad;
+		char *signer;
+	} signature;
+	char *message;
+	size_t width, indent1, indent2;
+	unsigned use_color;
+	int padding;
+
+	/* These offsets are relative to the start of the commit message. */
+	struct chunk author;
+	struct chunk committer;
+	struct chunk encoding;
+	size_t message_off;
+	size_t subject_off;
+	size_t body_off;
+
+	/* The following ones are relative to the result struct strbuf. */
+	struct chunk abbrev_commit_hash;
+	struct chunk abbrev_tree_hash;
+	struct chunk abbrev_parent_hashes;
+	size_t wrap_start;
+};
+
+void parse_commit_header(struct format_commit_context *);
+void parse_commit_message(struct format_commit_context *);
 
 /** Removes the first commit from a list sorted by date, and adds all
  * of its parents.

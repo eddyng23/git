@@ -174,36 +174,50 @@ static void show_children(struct rev_info *opt, struct commit *commit, int abbre
 	}
 }
 
+void format_decoration(struct strbuf *sb,
+		       const struct commit *commit,
+		       int use_color)
+{
+	const char *prefix = " (";
+	struct name_decoration *d;
+	const char *color_commit =
+		diff_get_color(use_color, DIFF_COMMIT);
+	const char *color_reset =
+		decorate_get_color(use_color, DECORATION_NONE);
+
+	load_ref_decorations(DECORATE_SHORT_REFS);
+	d = lookup_decoration(&name_decoration, &commit->object);
+	if (!d)
+		return;
+	while (d) {
+		strbuf_addstr(sb, color_commit);
+		strbuf_addstr(sb, prefix);
+		strbuf_addstr(sb, decorate_get_color(use_color, d->type));
+		if (d->type == DECORATION_REF_TAG)
+			strbuf_addstr(sb, "tag: ");
+		strbuf_addstr(sb, d->name);
+		strbuf_addstr(sb, color_reset);
+		prefix = ", ";
+		d = d->next;
+	}
+	if (prefix[0] == ',') {
+		strbuf_addstr(sb, color_commit);
+		strbuf_addch(sb, ')');
+		strbuf_addstr(sb, color_reset);
+	}
+}
+
 void show_decorations(struct rev_info *opt, struct commit *commit)
 {
-	const char *prefix;
-	struct name_decoration *decoration;
-	const char *color_commit =
-		diff_get_color_opt(&opt->diffopt, DIFF_COMMIT);
-	const char *color_reset =
-		decorate_get_color_opt(&opt->diffopt, DECORATION_NONE);
+	struct strbuf sb = STRBUF_INIT;
 
 	if (opt->show_source && commit->util)
 		printf("\t%s", (char *) commit->util);
 	if (!opt->show_decorations)
 		return;
-	decoration = lookup_decoration(&name_decoration, &commit->object);
-	if (!decoration)
-		return;
-	prefix = " (";
-	while (decoration) {
-		printf("%s", prefix);
-		fputs(decorate_get_color_opt(&opt->diffopt, decoration->type),
-		      stdout);
-		if (decoration->type == DECORATION_REF_TAG)
-			fputs("tag: ", stdout);
-		printf("%s", decoration->name);
-		fputs(color_reset, stdout);
-		fputs(color_commit, stdout);
-		prefix = ", ";
-		decoration = decoration->next;
-	}
-	putchar(')');
+	format_decoration(&sb, commit, opt->diffopt.use_color);
+	fputs(sb.buf, stdout);
+	strbuf_release(&sb);
 }
 
 /*
@@ -540,7 +554,6 @@ void show_log(struct rev_info *opt)
 	struct pretty_print_context ctx = {0};
 
 	opt->loginfo = NULL;
-	ctx.show_notes = opt->show_notes;
 	if (!opt->verbose_header) {
 		graph_show_commit(opt->graph);
 
@@ -599,7 +612,8 @@ void show_log(struct rev_info *opt)
 	if (opt->commit_format == CMIT_FMT_EMAIL) {
 		log_write_email_headers(opt, commit, &ctx.subject, &extra_headers,
 					&ctx.need_8bit_cte);
-	} else if (opt->commit_format != CMIT_FMT_USERFORMAT) {
+	} else if (opt->commit_format != CMIT_FMT_USERFORMAT &&
+		   opt->commit_format != CMIT_FMT_LUA) {
 		fputs(diff_get_color_opt(&opt->diffopt, DIFF_COMMIT), stdout);
 		if (opt->commit_format != CMIT_FMT_ONELINE)
 			fputs("commit ", stdout);
@@ -616,8 +630,8 @@ void show_log(struct rev_info *opt)
 			printf(" (from %s)",
 			       find_unique_abbrev(parent->object.sha1,
 						  abbrev_commit));
+		fputs(diff_get_color_opt(&opt->diffopt, DIFF_RESET), stdout);
 		show_decorations(opt, commit);
-		printf("%s", diff_get_color_opt(&opt->diffopt, DIFF_RESET));
 		if (opt->commit_format == CMIT_FMT_ONELINE) {
 			putchar(' ');
 		} else {
@@ -648,6 +662,18 @@ void show_log(struct rev_info *opt)
 	if (!commit->buffer)
 		return;
 
+	if (opt->show_notes) {
+		int raw;
+		struct strbuf notebuf = STRBUF_INIT;
+
+		raw = (opt->commit_format == CMIT_FMT_USERFORMAT);
+		format_display_notes(commit->object.sha1, &notebuf,
+				     get_log_output_encoding(), raw);
+		ctx.notes_message = notebuf.len
+			? strbuf_detach(&notebuf, NULL)
+			: xcalloc(1, 1);
+	}
+
 	/*
 	 * And then the pretty-printed message itself
 	 */
@@ -664,6 +690,16 @@ void show_log(struct rev_info *opt)
 
 	if (opt->add_signoff)
 		append_signoff(&msgbuf, opt->add_signoff);
+
+	if ((ctx.fmt != CMIT_FMT_USERFORMAT) &&
+	    ctx.notes_message && *ctx.notes_message) {
+		if (ctx.fmt == CMIT_FMT_EMAIL) {
+			strbuf_addstr(&msgbuf, "---\n");
+			opt->shown_dashes = 1;
+		}
+		strbuf_addstr(&msgbuf, ctx.notes_message);
+	}
+
 	if (opt->show_log_size) {
 		printf("log size %i\n", (int)msgbuf.len);
 		graph_show_oneline(opt->graph);
@@ -689,10 +725,12 @@ void show_log(struct rev_info *opt)
 	}
 
 	strbuf_release(&msgbuf);
+	free(ctx.notes_message);
 }
 
 int log_tree_diff_flush(struct rev_info *opt)
 {
+	opt->shown_dashes = 0;
 	diffcore_std(&opt->diffopt);
 
 	if (diff_queue_is_empty()) {
@@ -720,10 +758,11 @@ int log_tree_diff_flush(struct rev_info *opt)
 					opt->diffopt.output_prefix_data);
 				fwrite(msg->buf, msg->len, 1, stdout);
 			}
-			if ((pch & opt->diffopt.output_format) == pch) {
-				printf("---");
+			if (!opt->shown_dashes) {
+				if ((pch & opt->diffopt.output_format) == pch)
+					printf("---");
+				putchar('\n');
 			}
-			putchar('\n');
 		}
 	}
 	diff_flush(&opt->diffopt);

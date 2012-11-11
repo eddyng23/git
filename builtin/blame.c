@@ -42,6 +42,7 @@ static int blank_boundary;
 static int incremental;
 static int xdl_opts;
 static int abbrev = -1;
+static int no_whole_file_rename;
 
 static enum date_mode blame_date_mode = DATE_ISO8601;
 static size_t blame_date_width;
@@ -1226,7 +1227,7 @@ static void pass_blame(struct scoreboard *sb, struct origin *origin, int opt)
 	 * The first pass looks for unrenamed path to optimize for
 	 * common cases, then we look for renames in the second pass.
 	 */
-	for (pass = 0; pass < 2; pass++) {
+	for (pass = 0; pass < 2 - no_whole_file_rename; pass++) {
 		struct origin *(*find)(struct scoreboard *,
 				       struct commit *, struct origin *);
 		find = pass ? find_rename : find_origin;
@@ -1425,7 +1426,7 @@ static void get_commit_info(struct commit *commit,
 			    int detailed)
 {
 	int len;
-	const char *subject;
+	const char *subject, *encoding;
 	char *reencoded, *message;
 	static char author_name[1024];
 	static char author_mail[1024];
@@ -1446,7 +1447,8 @@ static void get_commit_info(struct commit *commit,
 			die("Cannot read commit %s",
 			    sha1_to_hex(commit->object.sha1));
 	}
-	reencoded = reencode_commit_message(commit, NULL);
+	encoding = get_log_output_encoding();
+	reencoded = logmsg_reencode(commit, encoding);
 	message   = reencoded ? reencoded : commit->buffer;
 	ret->author = author_name;
 	ret->author_mail = author_mail;
@@ -2402,6 +2404,7 @@ int cmd_blame(int argc, const char **argv, const char *prefix)
 	init_revisions(&revs, NULL);
 	revs.date_mode = blame_date_mode;
 	DIFF_OPT_SET(&revs.diffopt, ALLOW_TEXTCONV);
+	DIFF_OPT_SET(&revs.diffopt, FOLLOW_RENAMES);
 
 	save_commit_buffer = 0;
 	dashdash_pos = 0;
@@ -2425,6 +2428,8 @@ int cmd_blame(int argc, const char **argv, const char *prefix)
 		parse_revision_opt(&revs, &ctx, options, blame_opt_usage);
 	}
 parse_done:
+	no_whole_file_rename = !DIFF_OPT_TST(&revs.diffopt, FOLLOW_RENAMES);
+	DIFF_OPT_CLR(&revs.diffopt, FOLLOW_RENAMES);
 	argc = parse_options_end(&ctx);
 
 	if (0 < abbrev)

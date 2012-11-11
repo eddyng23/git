@@ -26,6 +26,7 @@ static int diff_detect_rename_default;
 static int diff_rename_limit_default = 400;
 static int diff_suppress_blank_empty;
 static int diff_use_color_default = -1;
+static int diff_context_default = 3;
 static const char *diff_word_regex_cfg;
 static const char *external_diff_cmd_cfg;
 int diff_auto_refresh_index = 1;
@@ -139,6 +140,12 @@ int git_diff_ui_config(const char *var, const char *value, void *cb)
 {
 	if (!strcmp(var, "diff.color") || !strcmp(var, "color.diff")) {
 		diff_use_color_default = git_config_colorbool(var, value);
+		return 0;
+	}
+	if (!strcmp(var, "diff.context")) {
+		diff_context_default = git_config_int(var, value);
+		if (diff_context_default < 0)
+			return -1;
 		return 0;
 	}
 	if (!strcmp(var, "diff.renames")) {
@@ -1300,6 +1307,7 @@ struct diffstat_t {
 		unsigned is_unmerged:1;
 		unsigned is_binary:1;
 		unsigned is_renamed:1;
+		unsigned is_interesting:1;
 		uintmax_t added, deleted;
 	} **files;
 };
@@ -1469,7 +1477,7 @@ static void show_stats(struct diffstat_t *data, struct diff_options *options)
 	for (i = 0; (i < count) && (i < data->nr); i++) {
 		struct diffstat_file *file = data->files[i];
 		uintmax_t change = file->added + file->deleted;
-		if (!data->files[i]->is_renamed &&
+		if (!data->files[i]->is_interesting &&
 			 (change == 0)) {
 			count++; /* not shown == room for one more */
 			continue;
@@ -1590,7 +1598,7 @@ static void show_stats(struct diffstat_t *data, struct diff_options *options)
 		uintmax_t deleted = data->files[i]->deleted;
 		int name_len;
 
-		if (!data->files[i]->is_renamed &&
+		if (!data->files[i]->is_interesting &&
 			 (added + deleted == 0)) {
 			total_files--;
 			continue;
@@ -1669,7 +1677,7 @@ static void show_stats(struct diffstat_t *data, struct diff_options *options)
 	for (i = count; i < data->nr; i++) {
 		uintmax_t added = data->files[i]->added;
 		uintmax_t deleted = data->files[i]->deleted;
-		if (!data->files[i]->is_renamed &&
+		if (!data->files[i]->is_interesting &&
 			 (added + deleted == 0)) {
 			total_files--;
 			continue;
@@ -1697,7 +1705,7 @@ static void show_shortstats(struct diffstat_t *data, struct diff_options *option
 
 		if (data->files[i]->is_unmerged)
 			continue;
-		if (!data->files[i]->is_renamed && (added + deleted == 0)) {
+		if (!data->files[i]->is_interesting && (added + deleted == 0)) {
 			total_files--;
 		} else if (!data->files[i]->is_binary) { /* don't count bytes */
 			adds += added;
@@ -2397,13 +2405,20 @@ static void builtin_diffstat(const char *name_a, const char *name_b,
 			     struct diff_filespec *two,
 			     struct diffstat_t *diffstat,
 			     struct diff_options *o,
-			     int complete_rewrite)
+			     struct diff_filepair *p)
 {
 	mmfile_t mf1, mf2;
 	struct diffstat_file *data;
 	int same_contents;
+	int complete_rewrite = 0;
+
+	if (!DIFF_PAIR_UNMERGED(p)) {
+		if (p->status == DIFF_STATUS_MODIFIED && p->score)
+			complete_rewrite = 1;
+	}
 
 	data = diffstat_add(diffstat, name_a, name_b);
+	data->is_interesting = p->status != 0;
 
 	if (!one || !two) {
 		data->is_unmerged = 1;
@@ -3114,11 +3129,10 @@ static void run_diffstat(struct diff_filepair *p, struct diff_options *o,
 {
 	const char *name;
 	const char *other;
-	int complete_rewrite = 0;
 
 	if (DIFF_PAIR_UNMERGED(p)) {
 		/* unmerged */
-		builtin_diffstat(p->one->path, NULL, NULL, NULL, diffstat, o, 0);
+		builtin_diffstat(p->one->path, NULL, NULL, NULL, diffstat, o, p);
 		return;
 	}
 
@@ -3131,9 +3145,7 @@ static void run_diffstat(struct diff_filepair *p, struct diff_options *o,
 	diff_fill_sha1_info(p->one);
 	diff_fill_sha1_info(p->two);
 
-	if (p->status == DIFF_STATUS_MODIFIED && p->score)
-		complete_rewrite = 1;
-	builtin_diffstat(name, other, p->one, p->two, diffstat, o, complete_rewrite);
+	builtin_diffstat(name, other, p->one, p->two, diffstat, o, p);
 }
 
 static void run_checkdiff(struct diff_filepair *p, struct diff_options *o)
@@ -3170,7 +3182,7 @@ void diff_setup(struct diff_options *options)
 	options->break_opt = -1;
 	options->rename_limit = -1;
 	options->dirstat_permille = diff_dirstat_permille_default;
-	options->context = 3;
+	options->context = diff_context_default;
 	DIFF_OPT_SET(options, RENAME_EMPTY);
 
 	options->change = diff_change;
@@ -3582,6 +3594,8 @@ int diff_opt_parse(struct diff_options *options, const char **av, int ac)
 		DIFF_OPT_SET(options, FIND_COPIES_HARDER);
 	else if (!strcmp(arg, "--follow"))
 		DIFF_OPT_SET(options, FOLLOW_RENAMES);
+	else if (!strcmp(arg, "--no-follow"))
+		DIFF_OPT_CLR(options, FOLLOW_RENAMES);
 	else if (!strcmp(arg, "--color"))
 		options->use_color = 1;
 	else if (!prefixcmp(arg, "--color=")) {

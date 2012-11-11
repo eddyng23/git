@@ -271,6 +271,12 @@ all::
 # Define USE_NED_ALLOCATOR if you want to replace the platforms default
 # memory allocators with the nedmalloc allocator written by Niall Douglas.
 #
+# Define USE_LUA to the package name pkg-config command knows your version
+# of Lua as (e.g. "make USE_LUA=lua5.2"). Alternatively, you can set it to
+# any non-empty string and define LUA_INCLUDE_ARG and LUA_LINK_ARG yourself
+# (e.g. "make USE_LUA=YesPlease LUA_INCLUDE_ARG=-I/usr/local/include/lua
+# LUA_LINK_ARG=-llua") appropriately.
+#
 # Define NO_REGEX if you have no or inferior regex support in your C library.
 #
 # Define HAVE_DEV_TTY if your system can open /dev/tty to interact with the
@@ -298,6 +304,12 @@ all::
 #   DEFAULT_EDITOR='~/bin/vi',
 #   DEFAULT_EDITOR='$GIT_FALLBACK_EDITOR',
 #   DEFAULT_EDITOR='"C:\Program Files\Vim\gvim.exe" --nofork'
+#
+# You can define DEFAULT_DOC_TARGET to something other than "all" to change it
+# from the built-in default of generating manpages and htmldocs.  e.g.
+#
+#   DEFAULT_DOC_TARGET='man html info pdf'
+#   DEFAULT_DOC_TARGET='html'
 #
 # Define COMPUTE_HEADER_DEPENDENCIES to "yes" if you want dependencies on
 # header files to be automatically computed, to avoid rebuilding objects when
@@ -495,6 +507,7 @@ PROGRAM_OBJS += sh-i18n--envsubst.o
 PROGRAM_OBJS += shell.o
 PROGRAM_OBJS += show-index.o
 PROGRAM_OBJS += upload-pack.o
+PROGRAM_OBJS += remote-testsvn.o
 
 # Binary suffix, set to .exe for Windows builds
 X =
@@ -506,6 +519,7 @@ TEST_PROGRAMS_NEED_X += test-ctype
 TEST_PROGRAMS_NEED_X += test-date
 TEST_PROGRAMS_NEED_X += test-delta
 TEST_PROGRAMS_NEED_X += test-dump-cache-tree
+TEST_PROGRAMS_NEED_X += test-generation
 TEST_PROGRAMS_NEED_X += test-genrandom
 TEST_PROGRAMS_NEED_X += test-index-version
 TEST_PROGRAMS_NEED_X += test-line-buffer
@@ -523,6 +537,7 @@ TEST_PROGRAMS_NEED_X += test-sigchain
 TEST_PROGRAMS_NEED_X += test-string-list
 TEST_PROGRAMS_NEED_X += test-subprocess
 TEST_PROGRAMS_NEED_X += test-svn-fe
+TEST_PROGRAMS_NEED_X += test-wildmatch
 
 TEST_PROGRAMS = $(patsubst %,%$X,$(TEST_PROGRAMS_NEED_X))
 
@@ -647,6 +662,7 @@ LIB_H += levenshtein.h
 LIB_H += list-objects.h
 LIB_H += ll-merge.h
 LIB_H += log-tree.h
+LIB_H += lua-commit.h
 LIB_H += mailmap.h
 LIB_H += merge-file.h
 LIB_H += merge-recursive.h
@@ -660,6 +676,7 @@ LIB_H += pack-revindex.h
 LIB_H += pack.h
 LIB_H += parse-options.h
 LIB_H += patch-ids.h
+LIB_H += pathspec.h
 LIB_H += pkt-line.h
 LIB_H += progress.h
 LIB_H += prompt.h
@@ -695,6 +712,7 @@ LIB_H += userdiff.h
 LIB_H += utf8.h
 LIB_H += varint.h
 LIB_H += walker.h
+LIB_H += wildmatch.h
 LIB_H += wt-status.h
 LIB_H += xdiff-interface.h
 LIB_H += xdiff/xdiff.h
@@ -760,6 +778,7 @@ LIB_OBJS += list-objects.o
 LIB_OBJS += ll-merge.o
 LIB_OBJS += lockfile.o
 LIB_OBJS += log-tree.o
+LIB_OBJS += lua-commit.o
 LIB_OBJS += mailmap.o
 LIB_OBJS += match-trees.o
 LIB_OBJS += merge-file.o
@@ -780,6 +799,7 @@ LIB_OBJS += parse-options-cb.o
 LIB_OBJS += patch-delta.o
 LIB_OBJS += patch-ids.o
 LIB_OBJS += path.o
+LIB_OBJS += pathspec.o
 LIB_OBJS += pkt-line.o
 LIB_OBJS += preload-index.o
 LIB_OBJS += pretty.o
@@ -826,6 +846,7 @@ LIB_OBJS += utf8.o
 LIB_OBJS += varint.o
 LIB_OBJS += version.o
 LIB_OBJS += walker.o
+LIB_OBJS += wildmatch.o
 LIB_OBJS += wrapper.o
 LIB_OBJS += write_or_die.o
 LIB_OBJS += ws.o
@@ -843,6 +864,7 @@ BUILTIN_OBJS += builtin/branch.o
 BUILTIN_OBJS += builtin/bundle.o
 BUILTIN_OBJS += builtin/cat-file.o
 BUILTIN_OBJS += builtin/check-attr.o
+BUILTIN_OBJS += builtin/check-ignore.o
 BUILTIN_OBJS += builtin/check-ref-format.o
 BUILTIN_OBJS += builtin/checkout-index.o
 BUILTIN_OBJS += builtin/checkout.o
@@ -1496,6 +1518,8 @@ ifneq (,$(SOCKLEN_T))
 	BASIC_CFLAGS += -Dsocklen_t=$(SOCKLEN_T)
 endif
 
+DEFAULT_DOC_TARGET ?= all
+
 ifeq ($(uname_S),Darwin)
 	ifndef NO_FINK
 		ifeq ($(shell test -d /sw/lib && echo y),y)
@@ -1893,6 +1917,13 @@ endif
 ifdef USE_NED_ALLOCATOR
        COMPAT_CFLAGS += -Icompat/nedmalloc
        COMPAT_OBJS += compat/nedmalloc/nedmalloc.o
+endif
+
+ifdef USE_LUA
+	LUA_INCLUDE_ARG ?= $(shell pkg-config --cflags $(USE_LUA))
+	LUA_LINK_ARG ?= $(shell pkg-config --libs $(USE_LUA))
+	BASIC_CFLAGS += -DUSE_LUA $(LUA_INCLUDE_ARG)
+	EXTLIBS += $(LUA_LINK_ARG)
 endif
 
 ifdef GIT_TEST_CMP_USE_COPIED_CONTEXT
@@ -2449,6 +2480,10 @@ git-http-push$X: revision.o http.o http-push.o GIT-LDFLAGS $(GITLIBS)
 	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) \
 		$(LIBS) $(CURL_LIBCURL) $(EXPAT_LIBEXPAT)
 
+git-remote-testsvn$X: remote-testsvn.o GIT-LDFLAGS $(GITLIBS) $(VCSSVN_LIB)
+	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $@ $(ALL_LDFLAGS) $(filter %.o,$^) $(LIBS) \
+	$(VCSSVN_LIB)
+
 $(REMOTE_CURL_ALIASES): $(REMOTE_CURL_PRIMARY)
 	$(QUIET_LNCP)$(RM) $@ && \
 	ln $< $@ 2>/dev/null || \
@@ -2468,7 +2503,7 @@ $(XDIFF_LIB): $(XDIFF_OBJS)
 $(VCSSVN_LIB): $(VCSSVN_OBJS)
 	$(QUIET_AR)$(RM) $@ && $(AR) rcs $@ $(VCSSVN_OBJS)
 
-export DEFAULT_EDITOR DEFAULT_PAGER
+export DEFAULT_EDITOR DEFAULT_PAGER DEFAULT_DOC_TARGET
 
 doc:
 	$(MAKE) -C Documentation all
